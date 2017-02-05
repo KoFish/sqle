@@ -3,6 +3,28 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("test.hrl").
 
+alter_test_() ->
+    [
+     ?_assertException(throw, {invalid_field, apa},
+                       sqle:alter(apa, fun (_) -> bop end,
+                                  sqle:select(['*']))),
+     ?_assertException(throw, {invalid_query, #{}},
+                       sqle:alter(apa, fun (_) -> bop end,
+                                  #{})),
+     ?_eq(<<"SELECT * FROM Foo">>,
+          sqle:alter(table, fun (_) -> <<"Foo">> end,
+                     sqle:select(['*']))),
+     ?_eq(<<"SELECT * FROM Foo WHERE foo=42 AND bar='test'">>,
+          sqle:add(where, {'and', [{'bar', '=', <<"test">>}]},
+                   sqle:select(['*'], 'Foo', [{where, {'and', [{foo, '=', 42}]}}]))),
+     ?_eq(<<"SELECT * FROM Foo JOIN Bar">>,
+          sqle:add(join, 'Bar',
+                   sqle:select(['*'], 'Foo'))),
+     ?_eq(<<"SELECT * FROM Foo LEFT OUTER JOIN Apa NATURAL JOIN Bar">>,
+          sqle:add(join, {'Bar', [natural]},
+                   sqle:select(['*'], 'Foo', #{joins => [{'Apa', [left]}]})))
+    ].
+
 select_test_() ->
     [?_eq(<<"SELECT *">>,
           sqle:select(['*'])),

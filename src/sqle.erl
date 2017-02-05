@@ -7,6 +7,7 @@
 -export([update/2, update/3]).
 -export([join/1, join/2]).
 -export([alter/3]).
+-export([add/3]).
 -export([to_iolist/2]).
 -export([to_binary/2]).
 
@@ -107,12 +108,28 @@ join(Table, Opts) ->
 %% ALTER operation --------------------------------------------------------------------------------
 alter(What, How, Q = #{query := Type})
   when Type =:= select; Type =:= update; Type =:= insert; Type =:= delete ->
-    case maps:is_key(What, maps:without(query, Q)) of
-        true -> {ok, alter_query(Type, What, How, Q)};
-        false -> {error, {invalid_field, What}}
+    case maps:is_key(What, maps:without([query], Q)) of
+        true -> alter_query(What, How, Q);
+        false -> throw({invalid_field, What})
     end;
 alter(_, _, Q) ->
-    {error, {invalid_query, Q}}.
+    throw({invalid_query, Q}).
+
+add(join, {Table, Opts}, Q = #{query := select}) ->
+    add(join, join(Table, Opts), Q);
+add(join, #{querypart := join} = Join, Q = #{query := select}) ->
+    alter(joins, fun (undefined) -> [Join];
+                     (OldJoins) -> OldJoins ++ [Join] end, Q);
+add(join, Table, Q = #{query := select}) ->
+    add(join, join(Table), Q);
+add(where, {AndOr, [_ | _] = Cond}, Q = #{query := Query})
+  when Query =:= select; Query =:= delete; Query =:= update ->
+    alter(where,
+          fun (undefined) -> {AndOr, Cond};
+              ({AndOr0, L}) when AndOr0 =:= AndOr -> {AndOr, L ++ Cond};
+              (OldCond) -> {AndOr, [OldCond] ++ Cond}
+          end, Q).
+
 
 %% SELECT -----------------------------------------------------------------------------------------
 to_iolist(#{query := select, cols := Cols} = Q, Enc) ->
@@ -192,6 +209,8 @@ set_opt(joins, Joins, #{query := select} = Q) ->
     Q#{joins := lists:map(
                  fun ({Table, Opts}) ->
                          join(Table, Opts);
+                     (#{querypart := join} = Join) ->
+                         Join;
                      (Table) ->
                          join(Table)
                  end,
@@ -257,7 +276,6 @@ cond_to_bin({'or', L}, Enc) ->
     sp(intersperse(<<"OR">>, conds_to_bin(L, Enc)));
 cond_to_bin({'exists', C}, Enc) ->
     BinC = case C of
-               _ when is_list(C) -> [$(, cm([val_to_bin(E, Enc) || E <- C]), $)];
                #{query := select} -> val_to_bin(C, Enc)
            end,
     sp([<<"EXISTS">>, BinC]);
@@ -405,10 +423,10 @@ on_conflict_to_bin({do_update, Update}, Enc) ->
     UpdateBin = set_to_bin(Update, Enc),
     sp([<<"DO UPDATE SET">>, UpdateBin]).
 
-alter_query(RecordName, F, How, Q) when is_function(How, 1) ->
-    alter_query(RecordName, F(element(F, Q)), How, Q);
-alter_query(_RecordName, F, NewValue, Q) ->
-    setelement(F, Q, NewValue).
+alter_query(F, How, Q) when is_function(How, 1) ->
+    alter_query(F, How(maps:get(F, Q)), Q);
+alter_query(F, NewValue, Q) ->
+    maps:put(F, NewValue, Q).
 
 b(L) when is_list(L) ->
     [b(E) || E <- L];
