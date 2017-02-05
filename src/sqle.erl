@@ -6,9 +6,11 @@
 -export([delete/1, delete/2]).
 -export([update/2, update/3]).
 -export([join/1, join/2]).
+-export([alter/3]).
 -export([to_iolist/2]).
 -export([to_binary/2]).
 
+%% Query object definitions
 -record(select, {
           cols,
           table,
@@ -97,6 +99,21 @@ join(Table) ->
 join(Table, Opts) ->
     J = join(Table),
     maps:fold(fun set_opt/3, J, opts(Opts)).
+
+%% ALTER operation --------------------------------------------------------------------------------
+alter(What, How, Q) ->
+    Record = element(1, Q),
+    Fields0 = case Record of
+                  select -> record_info(fields, select);
+                  update -> record_info(fields, update);
+                  delete -> record_info(fields, delete);
+                  insert -> record_info(fields, insert)
+              end,
+    EnumFields = lists:zip(lists:seq(2, length(Fields0) + 1), Fields0),
+    case lists:keyfind(What, 2, EnumFields) of
+        {N, What} -> {ok, alter_query(Record, N, How, Q)};
+        false -> {error, {invalid_field, What}}
+    end.
 
 %% SELECT -----------------------------------------------------------------------------------------
 to_iolist(#select{cols = Cols} = Q, Enc) ->
@@ -371,6 +388,11 @@ on_conflict_to_bin(do_nothing, _Enc) ->
 on_conflict_to_bin({do_update, Update}, Enc) ->
     UpdateBin = set_to_bin(Update, Enc),
     sp([<<"DO UPDATE SET">>, UpdateBin]).
+
+alter_query(RecordName, F, How, Q) when is_function(How, 1) ->
+    alter_query(RecordName, F(element(F, Q)), How, Q);
+alter_query(_RecordName, F, NewValue, Q) ->
+    setelement(F, Q, NewValue).
 
 b(L) when is_list(L) ->
     [b(E) || E <- L];
