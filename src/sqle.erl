@@ -11,45 +11,50 @@
 -export([to_binary/2]).
 
 %% Query object definitions
--record(select, {
-          cols,
-          table,
-          joins,
-          where,
-          limit,
-          offset,
-          order_by
-         }
+-define(SELECT(Cols), #{
+                 query => select,
+                 cols => Cols,
+                 table => undefined,
+                 joins => undefined,
+                 where => undefined,
+                 limit => undefined,
+                 offset => undefined,
+                 order_by => undefined
+                }
        ).
--record(insert, {
-          into,
-          cols,
-          vals,
-          on_conflict,
-          returning
-         }
+-define(INSERT(Into, Values), #{
+                       query => insert,
+                       into => Into,
+                       cols => undefined,
+                       vals => Values,
+                       on_conflict => undefined,
+                       returning => undefined
+                      }
        ).
--record(update, {
-          table,
-          vals,
-          where,
-          returning
-         }
+-define(UPDATE(Table, Set), #{
+                        query => update,
+                        table => Table,
+                        vals => Set,
+                        where => undefined,
+                        returning => undefined
+                       }
        ).
--record(delete, {
-          from,
-          where,
-          returning
-         }
+-define(DELETE(From), #{
+                 query => delete,
+                 from => From,
+                 where => undefined,
+                 returning => undefined
+                }
        ).
 
--record(join, {
-          dir,
-          natural = false,
-          using = [],
-          table,
-          on
-         }
+-define(JOIN(Table), #{
+               querypart => join,
+               dir => undefined,
+               natural => false,
+               using => [],
+               table => Table,
+               on => undefined
+              }
        ).
 
 %%====================================================================
@@ -58,7 +63,7 @@
 
 %% SELECT -----------------------------------------------------------------------------------------
 select(Cols) ->
-    #select{cols = Cols}.
+    ?SELECT(Cols).
 
 select(Cols, From) ->
     set_table(select(Cols), From).
@@ -69,8 +74,7 @@ select(Cols, From, Opts) ->
 
 %% INSERT -----------------------------------------------------------------------------------------
 insert(Into, Values) ->
-    #insert{into = Into,
-            vals = Values}.
+    ?INSERT(Into, Values).
 
 insert(Into, Values, Opts) ->
     Q = insert(Into, Values),
@@ -78,7 +82,7 @@ insert(Into, Values, Opts) ->
 
 %% DELETE------------------------------------------------------------------------------------------
 delete(From) ->
-    #delete{from = From}.
+    ?DELETE(From).
 
 delete(From, Opts) ->
     Q = delete(From),
@@ -86,7 +90,7 @@ delete(From, Opts) ->
 
 %% UPDATE -----------------------------------------------------------------------------------------
 update(Table, Set) ->
-    #update{table = Table, vals = Set}.
+    ?UPDATE(Table, Set).
 
 update(Table, Set, Opts) ->
     Q = update(Table, Set),
@@ -94,70 +98,71 @@ update(Table, Set, Opts) ->
 
 %% JOIN -------------------------------------------------------------------------------------------
 join(Table) ->
-    #join{table = Table}.
+    ?JOIN(Table).
 
 join(Table, Opts) ->
     J = join(Table),
     maps:fold(fun set_opt/3, J, opts(Opts)).
 
 %% ALTER operation --------------------------------------------------------------------------------
-alter(What, How, Q) ->
-    Record = element(1, Q),
-    Fields0 = case Record of
-                  select -> record_info(fields, select);
-                  update -> record_info(fields, update);
-                  delete -> record_info(fields, delete);
-                  insert -> record_info(fields, insert)
-              end,
-    EnumFields = lists:zip(lists:seq(2, length(Fields0) + 1), Fields0),
-    case lists:keyfind(What, 2, EnumFields) of
-        {N, What} -> {ok, alter_query(Record, N, How, Q)};
+alter(What, How, Q = #{query := Type})
+  when Type =:= select; Type =:= update; Type =:= insert; Type =:= delete ->
+    case maps:is_key(What, maps:without(query, Q)) of
+        true -> {ok, alter_query(Type, What, How, Q)};
         false -> {error, {invalid_field, What}}
-    end.
+    end;
+alter(_, _, Q) ->
+    {error, {invalid_query, Q}}.
 
 %% SELECT -----------------------------------------------------------------------------------------
-to_iolist(#select{cols = Cols} = Q, Enc) ->
+to_iolist(#{query := select, cols := Cols} = Q, Enc) ->
     sp([<<"SELECT">>, cols_to_bin(Cols, Enc)]
-       ++ [select_to_bin(from, {Q#select.table, Q#select.joins}, Enc) || Q#select.table =/= undefined]
-       ++ [select_to_bin(where, Q#select.where, Enc) || Q#select.where =/= undefined]
-       ++ [select_to_bin(limit, Q#select.limit, Enc) || Q#select.limit =/= undefined]
-       ++ [select_to_bin(offset, Q#select.offset, Enc) || Q#select.offset =/= undefined]
-       ++ [select_to_bin(order_by, Q#select.order_by, Enc) || Q#select.order_by =/= undefined]);
+       ++ select_to_bin(from, {maps:get(table, Q), maps:get(joins, Q)}, Enc)
+       ++ select_to_bin(where, maps:get(where, Q), Enc)
+       ++ select_to_bin(limit, maps:get(limit, Q), Enc)
+       ++ select_to_bin(offset, maps:get(offset, Q), Enc)
+       ++ select_to_bin(order_by, maps:get(order_by, Q), Enc)
+      );
 %% INSERT -----------------------------------------------------------------------------------------
-to_iolist(#insert{into = Into, vals = Vals} = Q, Enc) ->
+to_iolist(#{query := insert, into := Into, vals := Vals} = Q, Enc) ->
     sp([<<"INSERT">>]
-       ++ [insert_to_bin(into, Into, Enc)]
-       ++ [insert_to_bin(cols, Q#insert.cols, Enc) || Q#insert.cols =/= undefined]
-       ++ [insert_to_bin(vals, Vals, Enc)]
-       ++ [insert_to_bin(on_conflict, Q#insert.on_conflict, Enc) || Q#insert.on_conflict =/= undefined]
-       ++ [insert_to_bin(returning, Q#insert.returning, Enc) || Q#insert.returning =/= undefined]
+       ++ insert_to_bin(into, Into, Enc)
+       ++ insert_to_bin(cols, maps:get(cols, Q), Enc)
+       ++ insert_to_bin(vals, Vals, Enc)
+       ++ insert_to_bin(on_conflict, maps:get(on_conflict, Q), Enc)
+       ++ insert_to_bin(returning, maps:get(returning, Q), Enc)
       );
 %% DELETE -----------------------------------------------------------------------------------------
-to_iolist(#delete{from = Table} = Q, Enc) ->
+to_iolist(#{query := delete, from := Table} = Q, Enc) ->
     sp([<<"DELETE">>, <<"FROM">>, table_to_bin(Table, Enc)]
-       ++ [delete_to_bin(where, Q#delete.where, Enc) || Q#delete.where =/= undefined]
-       ++ [delete_to_bin(returning, Q#delete.returning, Enc) || Q#delete.returning =/= undefined]
+       ++ delete_to_bin(where, maps:get(where, Q), Enc)
+       ++ delete_to_bin(returning, maps:get(returning, Q), Enc)
       );
 %% UPDATE -----------------------------------------------------------------------------------------
-to_iolist(#update{table = Table, vals = Set} = Q, Enc) ->
+to_iolist(#{query := update, table := Table, vals := Set} = Q, Enc) ->
     sp([<<"UPDATE">>, table_to_bin(Table, Enc)]
-       ++ [update_to_bin(set, Set, Enc)]
-       ++ [update_to_bin(where, Q#update.where, Enc) || Q#update.where =/= undefined]
-       ++ [update_to_bin(returning, Q#update.returning, Enc) || Q#update.returning =/= undefined]
+       ++ update_to_bin(set, Set, Enc)
+       ++ update_to_bin(where, maps:get(where, Q), Enc)
+       ++ update_to_bin(returning, maps:get(returning, Q), Enc)
       );
 %% JOIN -------------------------------------------------------------------------------------------
-to_iolist(#join{table = Table} = J, Enc) ->
+to_iolist(#{querypart := join, table := Table} = J, Enc) ->
+    io:format("J: ~p~n", [J]),
+    Dir = maps:get(dir, J),
     sp(
       lists:append(
-        [[<<"NATURAL">>] || J#join.natural =:= true]
-        ++ [[<<"INNER">>] || J#join.dir =:= inner]
-        ++ [[<<"LEFT">>] || element(1, J#join.dir) =:= left]
-        ++ [[<<"RIGHT">>] || element(1, J#join.dir) =:= right]
-        ++ [[<<"FULL">>] || element(1, J#join.dir) =:= full]
-        ++ [[<<"OUTER">>] || element(2, J#join.dir) =:= outer]
+        [[<<"NATURAL">>] || maps:get(natural, J) =:= true]
+        ++ [[<<"INNER">>] || maps:get(dir, J) =:= inner]
+        ++ [case Dir of
+               {left, _} -> [<<"LEFT">>];
+               {right, _} -> [<<"RIGHT">>];
+               {full, _} -> [<<"FULL">>];
+               _ -> []
+           end]
+        ++ [[<<"OUTER">>] || element(2, Dir) =:= outer]
         ++ [[<<"JOIN">>, table_to_bin(Table, Enc)]]
-        ++ [[<<"USING">>, [$(, cm([b(U) || U <- J#join.using]), $)]] || J#join.using =/= []]
-        ++ [[<<"ON">>, cond_to_bin(J#join.on, Enc)] || J#join.on =/= undefined]
+        ++ [[<<"USING">>, [$(, cm([b(U) || U <- maps:get(using, J)]), $)]] || maps:get(using, J) =/= []]
+        ++ [[<<"ON">>, cond_to_bin(maps:get(on, J), Enc)] || maps:get(on, J) =/= undefined]
        )
      );
 %% LIST OF STATEMENTS -----------------------------------------------------------------------------
@@ -171,66 +176,66 @@ to_binary(Q, Enc) ->
 %% Internal functions
 %%====================================================================
 
-set_table(#select{} = Q, From) ->
-    Q#select{table = From}.
+set_table(#{query := select} = Q, From) ->
+    Q#{table := From}.
 
 %% SELECT -----------------------------------------------------------------------------------------
-set_opt(where, Where, #select{} = Q) ->
-    Q#select{where = Where};
-set_opt(limit, Limit, #select{} = Q) ->
-    Q#select{limit = Limit};
-set_opt(offset, Offset, #select{} = Q) ->
-    Q#select{offset = Offset};
-set_opt(order_by, Order, #select{} = Q) ->
-    Q#select{order_by = Order};
-set_opt(joins, Joins, #select{} = Q) ->
-    Q#select{joins = lists:map(
-                       fun ({Table, Opts}) ->
-                               join(Table, Opts);
-                           (Table) ->
-                               join(Table)
-                       end,
-                       Joins)};
+set_opt(where, Where, #{query := select} = Q) ->
+    Q#{where := Where};
+set_opt(limit, Limit, #{query := select} = Q) ->
+    Q#{limit := Limit};
+set_opt(offset, Offset, #{query := select} = Q) ->
+    Q#{offset := Offset};
+set_opt(order_by, Order, #{query := select} = Q) ->
+    Q#{order_by := Order};
+set_opt(joins, Joins, #{query := select} = Q) ->
+    Q#{joins := lists:map(
+                 fun ({Table, Opts}) ->
+                         join(Table, Opts);
+                     (Table) ->
+                         join(Table)
+                 end,
+                 Joins)};
 %% INSERT -----------------------------------------------------------------------------------------
-set_opt(columns, Columns, #insert{} = Q) ->
-    Q#insert{cols = Columns};
-set_opt(on_conflict, OnConf, #insert{} = Q) ->
-    Q#insert{on_conflict = OnConf};
-set_opt(returning, Returning, #insert{} = Q) ->
-    Q#insert{returning = Returning};
+set_opt(columns, Columns, #{query := insert} = Q) ->
+    Q#{cols := Columns};
+set_opt(on_conflict, OnConf, #{query := insert} = Q) ->
+    Q#{on_conflict := OnConf};
+set_opt(returning, Returning, #{query := insert} = Q) ->
+    Q#{returning := Returning};
 %% DELETE -----------------------------------------------------------------------------------------
-set_opt(where, Where, #delete{} = Q) ->
-    Q#delete{where = Where};
-set_opt(returning, Returning, #delete{} = Q) ->
-    Q#delete{returning = Returning};
+set_opt(where, Where, #{query := delete} = Q) ->
+    Q#{where := Where};
+set_opt(returning, Returning, #{query := delete} = Q) ->
+    Q#{returning := Returning};
 %% UPDATE -----------------------------------------------------------------------------------------
-set_opt(where, Where, #update{} = Q) ->
-    Q#update{where = Where};
-set_opt(returning, Returning, #update{} = Q) ->
-    Q#update{returning = Returning};
+set_opt(where, Where, #{query := update} = Q) ->
+    Q#{where := Where};
+set_opt(returning, Returning, #{query := update} = Q) ->
+    Q#{returning := Returning};
 %% JOIN -------------------------------------------------------------------------------------------
-set_opt(inner, true, #join{} = J) ->
-    J#join{dir = inner};
-set_opt(outer, true, #join{dir = {_, outer}} = J) ->
+set_opt(inner, true, #{querypart := join} = J) ->
+    J#{dir := inner};
+set_opt(outer, true, #{querypart := join, dir := {_, outer}} = J) ->
     J;
-set_opt(outer, true, #join{} = J) ->
-    J#join{dir = {undefined, outer}};
-set_opt(left, true, #join{} = J) ->
-    J#join{dir = {left, outer}};
-set_opt(right, true, #join{} = J) ->
-    J#join{dir = {right, outer}};
-set_opt(full, true, #join{} = J) ->
-    J#join{dir = {full, outer}};
-set_opt(natural, Nat, #join{} = J) ->
-    J#join{natural = Nat};
-set_opt(using, Using, #join{} = J) ->
-    J#join{using = Using};
-set_opt(on, Cond, #join{} = J) ->
-    J#join{on = Cond}.
+set_opt(outer, true, #{querypart := join} = J) ->
+    J#{dir := {undefined, outer}};
+set_opt(left, true, #{querypart := join} = J) ->
+    J#{dir := {left, outer}};
+set_opt(right, true, #{querypart := join} = J) ->
+    J#{dir := {right, outer}};
+set_opt(full, true, #{querypart := join} = J) ->
+    J#{dir := {full, outer}};
+set_opt(natural, Nat, #{querypart := join} = J) ->
+    J#{natural := Nat};
+set_opt(using, Using, #{querypart := join} = J) ->
+    J#{using := Using};
+set_opt(on, Cond, #{querypart := join} = J) ->
+    J#{on := Cond}.
 
 table_to_bin({T, 'as', A}, Enc) ->
     sp([table_to_bin(T, Enc), <<"AS">>, b(A)]);
-table_to_bin(Q, Enc) when is_record(Q, select) ->
+table_to_bin(Q = #{query := select}, Enc) ->
     [$(, to_iolist(Q, Enc), $)];
 table_to_bin(T, _Enc) ->
     b(T).
@@ -251,8 +256,9 @@ cond_to_bin({'and', L}, Enc) ->
 cond_to_bin({'or', L}, Enc) ->
     sp(intersperse(<<"OR">>, conds_to_bin(L, Enc)));
 cond_to_bin({'exists', C}, Enc) ->
-    BinC = if is_list(C) -> [$(, cm([val_to_bin(E, Enc) || E <- C]), $)];
-              is_record(C, select) -> val_to_bin(C, Enc)
+    BinC = case C of
+               _ when is_list(C) -> [$(, cm([val_to_bin(E, Enc) || E <- C]), $)];
+               #{query := select} -> val_to_bin(C, Enc)
            end,
     sp([<<"EXISTS">>, BinC]);
 cond_to_bin({'not', C}, Enc) ->
@@ -297,7 +303,7 @@ cols_to_bin(Cols, Enc) ->
          Cols
         )).
 
-val_to_bin(Q, Enc) when is_record(Q, select) ->
+val_to_bin(#{query := select} = Q, Enc) ->
     [$(, to_iolist(Q, Enc), $)];
 val_to_bin(null, _Enc) ->
     <<"NULL">>;
@@ -308,48 +314,58 @@ val_to_bin({V0, Op, V1}, Enc) ->
 val_to_bin(V, Enc) ->
     col_to_bin(V, Enc).
 
+select_to_bin(_, undefined, _Enc) ->
+    [];
+select_to_bin(from, {undefined, _}, _Enc) ->
+    [];
 select_to_bin(from, {Table, Joins}, Enc) ->
     TableBin = table_to_bin(Table, Enc),
-    sp([<<"FROM">>, TableBin] ++ joins_to_bin(Joins, Enc));
+    [sp([<<"FROM">>, TableBin] ++ joins_to_bin(Joins, Enc))];
 select_to_bin(where, Cond, Enc) ->
-    sp([<<"WHERE">>, cond_to_bin(Cond, Enc)]);
+    [sp([<<"WHERE">>, cond_to_bin(Cond, Enc)])];
 select_to_bin(limit, Limit, _Enc) ->
-    sp([<<"LIMIT">>, b(Limit)]);
+    [sp([<<"LIMIT">>, b(Limit)])];
 select_to_bin(offset, Offset, _Enc) ->
-    sp([<<"OFFSET">>, b(Offset)]);
+    [sp([<<"OFFSET">>, b(Offset)])];
 select_to_bin(order_by, Order, Enc) ->
-    sp([<<"ORDER BY">>, order_to_bin(Order, Enc)]).
+    [sp([<<"ORDER BY">>, order_to_bin(Order, Enc)])].
 
+insert_to_bin(_, undefined, _Enc) ->
+    [];
 insert_to_bin(into, Into, Enc) ->
     IntoBin = table_to_bin(Into, Enc),
-    sp([<<"INTO">>, IntoBin]);
+    [sp([<<"INTO">>, IntoBin])];
 insert_to_bin(cols, Columns, _Enc) ->
-    [$(, cm([b(C) || C <- Columns]), $)];
+    [[$(, cm([b(C) || C <- Columns]), $)]];
 insert_to_bin(vals, default_values, _Enc) ->
-    <<"DEFAULT VALUES">>;
+    [<<"DEFAULT VALUES">>];
 insert_to_bin(vals, Values0, Enc) ->
     Values = lists:map(
-               fun (Q) when is_record(Q, select) -> [$(, to_iolist(Q, Enc), $)];
+               fun (#{query := select} = Q) -> [$(, to_iolist(Q, Enc), $)];
                    (Vs) -> [$(, cm(lists:map(fun (default) -> <<"DEFAULT">>;
                                                  (V) -> val_to_bin(V, Enc) end, Vs)), $)] end,
                Values0),
-    sp([<<"VALUES">>, cm(Values)]);
+    [sp([<<"VALUES">>, cm(Values)])];
 insert_to_bin(on_conflict, OnConf, Enc) ->
-    sp([<<"ON CONFLICT">>, on_conflict_to_bin(OnConf, Enc)]);
+    [sp([<<"ON CONFLICT">>, on_conflict_to_bin(OnConf, Enc)])];
 insert_to_bin(returning, Returning, Enc) ->
-    sp([<<"RETURNING">>, cols_to_bin(Returning, Enc)]).
+    [sp([<<"RETURNING">>, cols_to_bin(Returning, Enc)])].
 
+delete_to_bin(_, undefined, _Enc) ->
+    [];
 delete_to_bin(where, Cond, Enc) ->
-    sp([<<"WHERE">>, cond_to_bin(Cond, Enc)]);
+    [sp([<<"WHERE">>, cond_to_bin(Cond, Enc)])];
 delete_to_bin(returning, Returning, Enc) ->
-    sp([<<"RETURNING">>, cols_to_bin(Returning, Enc)]).
+    [sp([<<"RETURNING">>, cols_to_bin(Returning, Enc)])].
 
+update_to_bin(_, undefined, _Enc) ->
+    [];
 update_to_bin(set, Set, Enc) ->
-    sp([<<"SET">>, set_to_bin(Set, Enc)]);
+    [sp([<<"SET">>, set_to_bin(Set, Enc)])];
 update_to_bin(where, Cond, Enc) ->
-    sp([<<"WHERE">>, cond_to_bin(Cond, Enc)]);
+    [sp([<<"WHERE">>, cond_to_bin(Cond, Enc)])];
 update_to_bin(returning, Returning, Enc) ->
-    sp([<<"RETURNING">>, cols_to_bin(Returning, Enc)]).
+    [sp([<<"RETURNING">>, cols_to_bin(Returning, Enc)])].
 
 joins_to_bin(NotList, Enc) when not is_list(NotList) ->
     joins_to_bin([NotList], Enc);
@@ -384,7 +400,7 @@ set_to_bin(Set, Enc) ->
          Set)).
 
 on_conflict_to_bin(do_nothing, _Enc) ->
-    <<"DO NOTHING">>;
+    [<<"DO NOTHING">>];
 on_conflict_to_bin({do_update, Update}, Enc) ->
     UpdateBin = set_to_bin(Update, Enc),
     sp([<<"DO UPDATE SET">>, UpdateBin]).
