@@ -1,0 +1,31 @@
+[footer]
+once = false
+text = ""
+
+[header]
+once = false
+text = ""
+
+[[tags]]
+footers = []
+name = "Default"
+tag = "default"
+
+[[tags]]
+footers = []
+name = "Documentation"
+tag = "doc"
+
+[[tags]]
+footers = []
+name = "Query structure"
+tag = "query"
+
+[[tags]]
+footers = []
+name = "Test"
+tag = "test"
+
+[[tags]]
+name = "Maintenance"
+tag = "maint"
