@@ -8,6 +8,7 @@
 -export([join/1, join/2]).
 -export([alter/3]).
 -export([add/3]).
+-export([to_equery/1]).
 -export([to_iolist/2]).
 -export([to_binary/2]).
 
@@ -130,41 +131,69 @@ add(where, {AndOr, [_ | _] = Cond}, Q = #{query := Query})
               (OldCond) -> {AndOr, [OldCond] ++ Cond}
           end, Q).
 
+to_equery(Q) ->
+    {SQL, Args, _} = extract_params(Q, 0),
+    {SQL, Args}.
+
+extract_params(Q, N0) ->
+    lists:foldl(
+      fun ({L}, {SQLAcc, ArgsAcc, N1}) ->
+              {SQLAcc ++ [$\$, integer_to_binary(N1)], ArgsAcc ++ [L], N1 + 1};
+          (B, {SQLAcc, Args, N1}) when is_binary(B); is_integer(B) ->
+              {SQLAcc ++ [B], Args, N1};
+          (Otherwise, Acc) ->
+              error({invalid, Otherwise}),
+              Acc
+      end,
+      {[], [], N0},
+      lists:flatten(to_equery_(Q))).
+
+to_iolist(Q, Enc) ->
+    lists:foldr(
+      fun ({L}, Acc) ->
+              [Enc(L) | Acc];
+          (B, Acc) when is_binary(B); is_integer(B) ->
+              [B | Acc]
+      end,
+      [],
+      lists:flatten(to_equery_(Q))).
+
+to_binary(Q, Enc) ->
+    iolist_to_binary(to_iolist(Q, Enc)).
 
 %% SELECT -----------------------------------------------------------------------------------------
-to_iolist(#{query := select, cols := Cols} = Q, Enc) ->
-    sp([<<"SELECT">>, cols_to_bin(Cols, Enc)]
-       ++ select_to_bin(from, {maps:get(table, Q), maps:get(joins, Q)}, Enc)
-       ++ select_to_bin(where, maps:get(where, Q), Enc)
-       ++ select_to_bin(limit, maps:get(limit, Q), Enc)
-       ++ select_to_bin(offset, maps:get(offset, Q), Enc)
-       ++ select_to_bin(order_by, maps:get(order_by, Q), Enc)
+to_equery_(#{query := select, cols := Cols} = Q) ->
+    sp([<<"SELECT">>, cols_to_bin(Cols)]
+       ++ select_to_bin(from, {maps:get(table, Q), maps:get(joins, Q)})
+       ++ select_to_bin(where, maps:get(where, Q))
+       ++ select_to_bin(limit, maps:get(limit, Q))
+       ++ select_to_bin(offset, maps:get(offset, Q))
+       ++ select_to_bin(order_by, maps:get(order_by, Q))
       );
 %% INSERT -----------------------------------------------------------------------------------------
-to_iolist(#{query := insert, into := Into, vals := Vals} = Q, Enc) ->
+to_equery_(#{query := insert, into := Into, vals := Vals} = Q) ->
     sp([<<"INSERT">>]
-       ++ insert_to_bin(into, Into, Enc)
-       ++ insert_to_bin(cols, maps:get(cols, Q), Enc)
-       ++ insert_to_bin(vals, Vals, Enc)
-       ++ insert_to_bin(on_conflict, maps:get(on_conflict, Q), Enc)
-       ++ insert_to_bin(returning, maps:get(returning, Q), Enc)
+       ++ insert_to_bin(into, Into)
+       ++ insert_to_bin(cols, maps:get(cols, Q))
+       ++ insert_to_bin(vals, Vals)
+       ++ insert_to_bin(on_conflict, maps:get(on_conflict, Q))
+       ++ insert_to_bin(returning, maps:get(returning, Q))
       );
 %% DELETE -----------------------------------------------------------------------------------------
-to_iolist(#{query := delete, from := Table} = Q, Enc) ->
-    sp([<<"DELETE">>, <<"FROM">>, table_to_bin(Table, Enc)]
-       ++ delete_to_bin(where, maps:get(where, Q), Enc)
-       ++ delete_to_bin(returning, maps:get(returning, Q), Enc)
+to_equery_(#{query := delete, from := Table} = Q) ->
+    sp([<<"DELETE">>, <<"FROM">>, table_to_bin(Table)]
+       ++ delete_to_bin(where, maps:get(where, Q))
+       ++ delete_to_bin(returning, maps:get(returning, Q))
       );
 %% UPDATE -----------------------------------------------------------------------------------------
-to_iolist(#{query := update, table := Table, vals := Set} = Q, Enc) ->
-    sp([<<"UPDATE">>, table_to_bin(Table, Enc)]
-       ++ update_to_bin(set, Set, Enc)
-       ++ update_to_bin(where, maps:get(where, Q), Enc)
-       ++ update_to_bin(returning, maps:get(returning, Q), Enc)
+to_equery_(#{query := update, table := Table, vals := Set} = Q) ->
+    sp([<<"UPDATE">>, table_to_bin(Table)]
+       ++ update_to_bin(set, Set)
+       ++ update_to_bin(where, maps:get(where, Q))
+       ++ update_to_bin(returning, maps:get(returning, Q))
       );
 %% JOIN -------------------------------------------------------------------------------------------
-to_iolist(#{querypart := join, table := Table} = J, Enc) ->
-    io:format("J: ~p~n", [J]),
+to_equery_(#{querypart := join, table := Table} = J) ->
     Dir = maps:get(dir, J),
     sp(
       lists:append(
@@ -177,17 +206,14 @@ to_iolist(#{querypart := join, table := Table} = J, Enc) ->
                _ -> []
            end]
         ++ [[<<"OUTER">>] || element(2, Dir) =:= outer]
-        ++ [[<<"JOIN">>, table_to_bin(Table, Enc)]]
+        ++ [[<<"JOIN">>, table_to_bin(Table)]]
         ++ [[<<"USING">>, [$(, cm([b(U) || U <- maps:get(using, J)]), $)]] || maps:get(using, J) =/= []]
-        ++ [[<<"ON">>, cond_to_bin(maps:get(on, J), Enc)] || maps:get(on, J) =/= undefined]
+        ++ [[<<"ON">>, cond_to_bin(maps:get(on, J))] || maps:get(on, J) =/= undefined]
        )
      );
 %% LIST OF STATEMENTS -----------------------------------------------------------------------------
-to_iolist(List, Enc) when is_list(List) ->
-    intersperse($;, [to_iolist(E, Enc) || E <- List]).
-
-to_binary(Q, Enc) ->
-    iolist_to_binary(to_iolist(Q, Enc)).
+to_equery_(List) when is_list(List) ->
+    intersperse($;, [to_equery_(E) || E <- List]).
 
 %%====================================================================
 %% Internal functions
@@ -252,181 +278,181 @@ set_opt(using, Using, #{querypart := join} = J) ->
 set_opt(on, Cond, #{querypart := join} = J) ->
     J#{on := Cond}.
 
-table_to_bin({T, 'as', A}, Enc) ->
-    sp([table_to_bin(T, Enc), <<"AS">>, b(A)]);
-table_to_bin(Q = #{query := select}, Enc) ->
-    [$(, to_iolist(Q, Enc), $)];
-table_to_bin(T, _Enc) ->
+alter_query(F, How, Q) when is_function(How, 1) ->
+    alter_query(F, How(maps:get(F, Q)), Q);
+alter_query(F, NewValue, Q) ->
+    maps:put(F, NewValue, Q).
+
+table_to_bin({T, 'as', A}) ->
+    sp([table_to_bin(T), <<"AS">>, b(A)]);
+table_to_bin(Q = #{query := select}) ->
+    [$(, to_equery_(Q), $)];
+table_to_bin(T) ->
     b(T).
 
-conds_to_bin([], _) ->
+conds_to_bin([]) ->
     [];
-conds_to_bin([{_, El} = Cond | L], Enc) when is_list(El) ->
-    [[$(, cond_to_bin(Cond, Enc), $)] | conds_to_bin(L, Enc)];
-conds_to_bin([E | L], Enc) ->
-    [cond_to_bin(E, Enc) | conds_to_bin(L, Enc)].
+conds_to_bin([{_, El} = Cond | L]) when is_list(El) ->
+    [[$(, cond_to_bin(Cond), $)] | conds_to_bin(L)];
+conds_to_bin([E | L]) ->
+    [cond_to_bin(E) | conds_to_bin(L)].
 
-cond_to_bin({E}, _Enc) when is_binary(E) ->
+cond_to_bin({lit, E}) when is_binary(E) ->
     E;
-cond_to_bin(L, Enc) when is_list(L) ->
-    cond_to_bin({'and', L}, Enc);
-cond_to_bin({'and', L}, Enc) ->
-    sp(intersperse(<<"AND">>, conds_to_bin(L, Enc)));
-cond_to_bin({'or', L}, Enc) ->
-    sp(intersperse(<<"OR">>, conds_to_bin(L, Enc)));
-cond_to_bin({'exists', C}, Enc) ->
+cond_to_bin(L) when is_list(L) ->
+    cond_to_bin({'and', L});
+cond_to_bin({'and', L}) ->
+    sp(intersperse(<<"AND">>, conds_to_bin(L)));
+cond_to_bin({'or', L}) ->
+    sp(intersperse(<<"OR">>, conds_to_bin(L)));
+cond_to_bin({'exists', C}) ->
     BinC = case C of
-               #{query := select} -> val_to_bin(C, Enc)
+               #{query := select} -> val_to_bin(C)
            end,
     sp([<<"EXISTS">>, BinC]);
-cond_to_bin({'not', C}, Enc) ->
-    BinC0 = cond_to_bin(C, Enc),
+cond_to_bin({'not', C}) ->
+    BinC0 = cond_to_bin(C),
     BinC = case C of
                {_Op, L} when is_list(L) -> [$(, BinC0, $)];
                L when is_list(L) -> [$(, BinC0, $)];
                _ -> BinC0
            end,
     sp([<<"NOT">>, BinC]);
-cond_to_bin({Col, 'between', Value0, 'and', Value1}, Enc) ->
-    sp([col_to_bin(Col, Enc), <<"BETWEEN">>,
-        val_to_bin(Value0, Enc), <<"AND">>,
-        val_to_bin(Value1, Enc)]);
-cond_to_bin({Col, Op, Value}, Enc) ->
+cond_to_bin({Col, 'between', Value0, 'and', Value1}) ->
+    sp([col_to_bin(Col), <<"BETWEEN">>,
+        val_to_bin(Value0), <<"AND">>,
+        val_to_bin(Value1)]);
+cond_to_bin({Col, Op, Value}) ->
     case lists:member(Op, ['<', '>', '<=', '>=', '=', '<>', '!=']) of
         true ->
-            [col_to_bin(Col, Enc), b(Op), val_to_bin(Value, Enc)];
+            [col_to_bin(Col), b(Op), val_to_bin(Value)];
         false ->
             BOp = iolist_to_binary(string:to_upper(binary_to_list(b(Op)))),
-            sp([col_to_bin(Col, Enc), BOp, val_to_bin(Value, Enc)])
+            sp([col_to_bin(Col), BOp, val_to_bin(Value)])
     end.
 
-col_to_bin({Table, Col}, _Enc) ->
-    b({[b(Table), $., b(Col)]});
-col_to_bin({B}, _Enc) when is_binary(B) ->
+col_to_bin({lit, B}) when is_binary(B); is_list(B) ->
     B;
-col_to_bin({L}, _Enc) when is_list(L) ->
-    iolist_to_binary(L);
-col_to_bin(C, Enc) ->
-    Enc(C).
+col_to_bin({Table, Col}) ->
+    b({lit, [b(Table), $., b(Col)]});
+col_to_bin(A) when is_atom(A) ->
+    b(A);
+col_to_bin(C) ->
+    {C}.
 
-cols_to_bin(Cols, Enc) ->
+cols_to_bin(Cols) ->
     cm(lists:map(
          fun ({Col, 'as', Alias}) ->
-                 sp([col_to_bin(Col, Enc), <<"AS">>, b(Alias)]);
+                 sp([col_to_bin(Col), <<"AS">>, b(Alias)]);
              ('*') ->
                  <<"*">>;
              (C) ->
-                 col_to_bin(C, Enc)
+                 col_to_bin(C)
          end,
          Cols
         )).
 
-val_to_bin(#{query := select} = Q, Enc) ->
-    [$(, to_iolist(Q, Enc), $)];
-val_to_bin(null, _Enc) ->
+val_to_bin(#{query := select} = Q) ->
+    [$(, to_equery_(Q), $)];
+val_to_bin(null) ->
     <<"NULL">>;
-val_to_bin({V0, Op, V1}, Enc) ->
-    BV0 = val_to_bin(V0, Enc),
-    BV1 = val_to_bin(V1, Enc),
+val_to_bin({V0, Op, V1}) ->
+    BV0 = val_to_bin(V0),
+    BV1 = val_to_bin(V1),
     [BV0, b(Op), BV1];
-val_to_bin(V, Enc) ->
-    col_to_bin(V, Enc).
+val_to_bin(V) ->
+    col_to_bin(V).
 
-select_to_bin(_, undefined, _Enc) ->
+select_to_bin(_, undefined) ->
     [];
-select_to_bin(from, {undefined, _}, _Enc) ->
+select_to_bin(from, {undefined, _}) ->
     [];
-select_to_bin(from, {Table, Joins}, Enc) ->
-    TableBin = table_to_bin(Table, Enc),
-    [sp([<<"FROM">>, TableBin] ++ joins_to_bin(Joins, Enc))];
-select_to_bin(where, Cond, Enc) ->
-    [sp([<<"WHERE">>, cond_to_bin(Cond, Enc)])];
-select_to_bin(limit, Limit, _Enc) ->
+select_to_bin(from, {Table, Joins}) ->
+    TableBin = table_to_bin(Table),
+    [sp([<<"FROM">>, TableBin] ++ joins_to_bin(Joins))];
+select_to_bin(where, Cond) ->
+    [sp([<<"WHERE">>, cond_to_bin(Cond)])];
+select_to_bin(limit, Limit) ->
     [sp([<<"LIMIT">>, b(Limit)])];
-select_to_bin(offset, Offset, _Enc) ->
+select_to_bin(offset, Offset) ->
     [sp([<<"OFFSET">>, b(Offset)])];
-select_to_bin(order_by, Order, Enc) ->
-    [sp([<<"ORDER BY">>, order_to_bin(Order, Enc)])].
+select_to_bin(order_by, Order) ->
+    [sp([<<"ORDER BY">>, order_to_bin(Order)])].
 
-insert_to_bin(_, undefined, _Enc) ->
+insert_to_bin(_, undefined) ->
     [];
-insert_to_bin(into, Into, Enc) ->
-    IntoBin = table_to_bin(Into, Enc),
+insert_to_bin(into, Into) ->
+    IntoBin = table_to_bin(Into),
     [sp([<<"INTO">>, IntoBin])];
-insert_to_bin(cols, Columns, _Enc) ->
+insert_to_bin(cols, Columns) ->
     [[$(, cm([b(C) || C <- Columns]), $)]];
-insert_to_bin(vals, default_values, _Enc) ->
+insert_to_bin(vals, default_values) ->
     [<<"DEFAULT VALUES">>];
-insert_to_bin(vals, Values0, Enc) ->
+insert_to_bin(vals, Values0) ->
     Values = lists:map(
-               fun (#{query := select} = Q) -> [$(, to_iolist(Q, Enc), $)];
+               fun (#{query := select} = Q) -> [$(, to_equery_(Q), $)];
                    (Vs) -> [$(, cm(lists:map(fun (default) -> <<"DEFAULT">>;
-                                                 (V) -> val_to_bin(V, Enc) end, Vs)), $)] end,
+                                                 (V) -> val_to_bin(V) end, Vs)), $)] end,
                Values0),
     [sp([<<"VALUES">>, cm(Values)])];
-insert_to_bin(on_conflict, OnConf, Enc) ->
-    [sp([<<"ON CONFLICT">>, on_conflict_to_bin(OnConf, Enc)])];
-insert_to_bin(returning, Returning, Enc) ->
-    [sp([<<"RETURNING">>, cols_to_bin(Returning, Enc)])].
+insert_to_bin(on_conflict, OnConf) ->
+    [sp([<<"ON CONFLICT">>, on_conflict_to_bin(OnConf)])];
+insert_to_bin(returning, Returning) ->
+    [sp([<<"RETURNING">>, cols_to_bin(Returning)])].
 
-delete_to_bin(_, undefined, _Enc) ->
+delete_to_bin(_, undefined) ->
     [];
-delete_to_bin(where, Cond, Enc) ->
-    [sp([<<"WHERE">>, cond_to_bin(Cond, Enc)])];
-delete_to_bin(returning, Returning, Enc) ->
-    [sp([<<"RETURNING">>, cols_to_bin(Returning, Enc)])].
+delete_to_bin(where, Cond) ->
+    [sp([<<"WHERE">>, cond_to_bin(Cond)])];
+delete_to_bin(returning, Returning) ->
+    [sp([<<"RETURNING">>, cols_to_bin(Returning)])].
 
-update_to_bin(_, undefined, _Enc) ->
+update_to_bin(_, undefined) ->
     [];
-update_to_bin(set, Set, Enc) ->
-    [sp([<<"SET">>, set_to_bin(Set, Enc)])];
-update_to_bin(where, Cond, Enc) ->
-    [sp([<<"WHERE">>, cond_to_bin(Cond, Enc)])];
-update_to_bin(returning, Returning, Enc) ->
-    [sp([<<"RETURNING">>, cols_to_bin(Returning, Enc)])].
+update_to_bin(set, Set) ->
+    [sp([<<"SET">>, set_to_bin(Set)])];
+update_to_bin(where, Cond) ->
+    [sp([<<"WHERE">>, cond_to_bin(Cond)])];
+update_to_bin(returning, Returning) ->
+    [sp([<<"RETURNING">>, cols_to_bin(Returning)])].
 
-joins_to_bin(NotList, Enc) when not is_list(NotList) ->
-    joins_to_bin([NotList], Enc);
-joins_to_bin([undefined | Rest], Enc) ->
-    joins_to_bin(Rest, Enc);
-joins_to_bin([Join | Rest], Enc) ->
-    [to_iolist(Join, Enc) | joins_to_bin(Rest, Enc)];
-joins_to_bin([], _)->
+joins_to_bin(NotList) when not is_list(NotList) ->
+    joins_to_bin([NotList]);
+joins_to_bin([undefined | Rest]) ->
+    joins_to_bin(Rest);
+joins_to_bin([Join | Rest]) ->
+    [to_equery_(Join) | joins_to_bin(Rest)];
+joins_to_bin([])->
     [].
 
-order_to_bin(L, Enc) when is_list(L) ->
-    [$(, cm([order_to_bin(E, Enc) || E <- L]), $)];
-order_to_bin({O, AscDesc}, Enc) when AscDesc =:= asc; AscDesc =:= desc ->
-    sp([order_to_bin(O, Enc), case AscDesc of
+order_to_bin(L) when is_list(L) ->
+    [$(, cm([order_to_bin(E) || E <- L]), $)];
+order_to_bin({O, AscDesc}) when AscDesc =:= asc; AscDesc =:= desc ->
+    sp([order_to_bin(O), case AscDesc of
                                   asc -> <<"ASC">>;
                                   desc -> <<"DESC">>
                               end]);
-order_to_bin(I, _Enc) when is_integer(I) ->
+order_to_bin(I) when is_integer(I) ->
     b(I);
-order_to_bin(A, Enc) when is_atom(A); is_tuple(A) ->
-    val_to_bin(A, Enc).
+order_to_bin(A) when is_atom(A); is_tuple(A) ->
+    val_to_bin(A).
 
-set_to_bin(Set, Enc) ->
+set_to_bin(Set) ->
     cm(lists:map(
          fun ({Col, Val}) ->
                  ValBin = case Val of
                               default -> <<"DEFAULT">>;
-                              _ -> val_to_bin(Val, Enc)
+                              _ -> val_to_bin(Val)
                           end,
-                 [col_to_bin(Col, Enc), $=, ValBin]
+                 [col_to_bin(Col), $=, ValBin]
          end,
          Set)).
 
-on_conflict_to_bin(do_nothing, _Enc) ->
+on_conflict_to_bin(do_nothing) ->
     [<<"DO NOTHING">>];
-on_conflict_to_bin({do_update, Update}, Enc) ->
-    UpdateBin = set_to_bin(Update, Enc),
+on_conflict_to_bin({do_update, Update}) ->
+    UpdateBin = set_to_bin(Update),
     sp([<<"DO UPDATE SET">>, UpdateBin]).
-
-alter_query(F, How, Q) when is_function(How, 1) ->
-    alter_query(F, How(maps:get(F, Q)), Q);
-alter_query(F, NewValue, Q) ->
-    maps:put(F, NewValue, Q).
 
 b(L) when is_list(L) ->
     [b(E) || E <- L];
@@ -434,9 +460,7 @@ b(A) when is_atom(A) ->
     atom_to_binary(A, utf8);
 b(I) when is_integer(I) ->
     integer_to_binary(I);
-b({L}) when is_list(L) ->
-    L;
-b({B}) when is_binary(B) ->
+b({lit, B}) when is_binary(B); is_list(B) ->
     B;
 b(B) when is_binary(B) ->
     B.

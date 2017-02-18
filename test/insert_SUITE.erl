@@ -15,7 +15,7 @@ insert_test_() ->
      ?_eq(<<"INSERT INTO Foo VALUES ('APA',42),('BEPA',43)">>,
           sqle:insert('Foo', [[<<"APA">>, 42], [<<"BEPA">>, 43]])),
      ?_eq(<<"INSERT INTO Foo (a,b,c) VALUES ('APA',42,NOW())">>,
-          sqle:insert('Foo', [[<<"APA">>, 42, {<<"NOW()">>}]],
+          sqle:insert('Foo', [[<<"APA">>, 42, {lit, <<"NOW()">>}]],
                      [{columns, [a, b, c]}])),
      ?_eq(<<"INSERT INTO Foo AS F (a,b) VALUES ('APA',42)">>,
           sqle:insert({'Foo', 'as', 'F'}, [[<<"APA">>, 42]],

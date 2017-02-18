@@ -11,4 +11,5 @@ intersperse(_, []) -> [];
 intersperse(Ch, L) -> tl(lists:append([[Ch, E] || E <- L])).
 
 -define(_eq(E, A), ?_assertEqual(E, sqle:to_binary(A, fun basic_encoder/1))).
+-define(_eeq(E, A), ?_assertEqual(E, (fun ({C, D}) -> {iolist_to_binary(C), D} end)(sqle:to_equery(A)))).
 
