@@ -1,6 +1,6 @@
 {application, sqle,
  [{description, "SQL building library"},
-  {vsn, "0.1.0"},
+  {vsn, "0.2.1"},
   {registered, []},
   {applications,
    [kernel,
