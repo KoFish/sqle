@@ -132,7 +132,7 @@ add(where, {AndOr, [_ | _] = Cond}, Q = #{query := Query})
           end, Q).
 
 to_equery(Q) ->
-    {SQL, Args, _} = extract_params(Q, 0),
+    {SQL, Args, _} = extract_params(Q, 1),
     {SQL, Args}.
 
 extract_params(Q, N0) ->
